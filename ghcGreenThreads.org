@@ -1,5 +1,4 @@
 * GHC Green Threads
-** OS Threads
 ** Capabilities
 *** virtual CPU within the Haskell runtime
 *** a Task which holds a capability is _never_ blocked by the OS
@@ -103,7 +102,7 @@ scheduler(cap)
 **** stack overflow occurred
 **** heap overflow occurred
 ***** sometimes a heap overflow and a context switch happen at the same time
-***** if the thread had requested a larte block of mem it still goes to the front of the queue so another thread doesn't steal it's large block
+***** if the thread had requested a large block of mem it still goes to the front of the queue so another thread doesn't steal it's large block
 ***** otherwise it goes to the back
 **** task attempts to run a thread but it's bound to another task
 **** thread is associated to a blackhole and another thread is blocked on the thunk's evaluation
@@ -115,3 +114,15 @@ scheduler(cap)
 **** the thread becomes unblocked
 **** a thread is migrated to another capability (though in this case the queue was probably empty anyway)
 **** thread finishes but needs to be kept around (Related to in-calls, not sure how)
+** Blocking
+*** in the unthreaded runtime all foreign calls will block, but IO operations will not
+*** in the threaded runtime only unsafe foreign calls block, but they block the whole runtime
+** Bound threads
+*** forkOS makes a bound thread
+**** bound threads have access to the POSIX thread-local storage
+**** foreign libraries see bound threads exactly as they would see any pthread
+*** bound threads are more expensive than unbound
+*** context switching from bound to unbound (or vice versa) is much more expensive than from unbound to unbound
+*** note that the main thread is always bound
+**** it may be expensive to have a lot of communication between the main thread and unbound (forkIO) threads
+**** create an unbound coordinator thread insteda

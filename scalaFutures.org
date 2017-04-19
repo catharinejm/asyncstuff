@@ -1,0 +1,36 @@
+* Scala Futures
+** ExecutionContext
+*** implements a Java ForkJoinPool
+**** Lower-level execution model is very similar to green threads
+***** futures go into queues, run on OS threads, one thread per core, etc
+**** But a Future is intended to be a single operation, returning a value
+**** can be used for
+***** map/reduce type jobs (with fork followed by join), or
+***** fully asynchronous jobs that run and end with no relationship to other jobs
+**** Futures are built on top of the fully asynchronous model
+** Futures/Promises
+*** Futures and promises are the really same thing
+*** Promises have a future associated with them that can be flatMapped onto
+*** Creating a new Future actually creates a promise and then returns that promise's Future
+
+  def flatMap[S](f: T => Future[S])(implicit executor: ExecutionContext): Future[S] = {
+    import impl.Promise.DefaultPromise
+    val p = new DefaultPromise[S]()
+    onComplete {
+      case f: Failure[_] => p complete f.asInstanceOf[Failure[S]]
+      case Success(v) => try f(v) match {
+        // If possible, link DefaultPromises to avoid space leaks
+        case dp: DefaultPromise[_] => dp.asInstanceOf[DefaultPromise[S]].linkRootOf(p)
+        case fut => fut.onComplete(p.complete)(internalExecutor)
+      } catch { case NonFatal(t) => p failure t }
+    }
+    p.future
+  }
+
+** differences between Future and green thread
+*** A green thread is a whole execution scope
+*** whereas a Future is intended to be a single operation, returning a value
+*** it's normal to put a whole single-threaded process into a green thread
+*** a single-threaded process is meant to split into one Future per step in the scala model
+*** blocking is OK in green threads, the thread just parks
+*** blocking in a Future requires a special method call to prevent the whole ExecutionContext from being blocked
