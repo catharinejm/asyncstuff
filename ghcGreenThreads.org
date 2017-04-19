@@ -1,0 +1,117 @@
+* GHC Green Threads
+** OS Threads
+** Capabilities
+*** virtual CPU within the Haskell runtime
+*** a Task which holds a capability is _never_ blocked by the OS
+**** whenever a Task blocks it relinquishes the capability
+**** This makes some implementation details simpler
+**** e.g. capabilities can use spin locks b/c the lock holder will never block and won't be held for very long
+*** Two states
+**** Free - no running Task
+**** owned - has a running Task
+*** Components
+**** VM registers
+**** Current Task
+**** queue of runnable haskell threads
+**** list of haskell threads making safe foreign calls
+**** list of worker OS threads
+**** list of Tasks waiting to return from foreign calls
+**** list of haskell threads waiting to wake up on this capability
+*** Handing over a capability
+**** A Task may relinquish a capability for the following reasons
+***** The haskell thread at the head of the queue is not appropriate for this task
+****** it is bound to another task, or
+****** it is unbound and the current task is bound
+***** There is a task waiting to return to haskell from a foreign call
+****** these get priority over haskell threads in the queue because in general they haven't had a full time slice yet
+***** another task needs to do a stop-the-world GC
+**** in very broad strokes hand-off happens as follows
+***** the task we're handing to is told which capability to wake up on and woken
+***** the capability is marked Free
+***** the tasks wakes up and tries to claim the capability
+***** if another claimed the capability first, then the task goes back to sleep
+***** that other task will re-initiate hand-off when it finishes
+**** Capabilities are marked Free rather than given directly to support fast callouts
+***** when a safe foreign call is made, we have to release the capability
+***** if the call is short we don't want to incur the full cost of task switching
+***** there's a good chance the out-calling task will reclaim the capability when the call returns and continue
+***** the woken worker task will go back to sleep again
+****** However, if there are no free CPUs to run the worker on it may actually incur a double context switch
+** Tasks
+*** A wrapper around an OS thread
+*** Every OS thread known to the runtime has a Task
+*** Task contains a mutex and a condition variable
+**** variable is used when OS threads need to synchronize, or
+**** when they need to sleep waiting on some condition
+*** Task points to currently owned capability
+**** NULL when no capability is owned
+*** Structure
+**** OS thread that owns this task
+**** Capability that the task holds
+**** current InCall for the task
+**** condition variable on which the task can be put to sleep
+**** link fields for putting the Task on various queues
+** Haskell Threads (Thread State Objects, TSOs)
+*** essentially normal, garbage collected closures
+** InCalls
+*** These are calls into the runtime from C (I think)
+*** A Task object is allocated whenever an in-call is made (unless calling OS thread already has a Task)
+*** Structure
+**** pointer to the Task which made the in-call
+**** pointer to the TSO that will excecute the call
+**** a slot to save the TSO in case it needs to make another foreign call
+**** a pointer to the previous InCall
+***** if the Task had made an earlier in-call which made an out-call call that made this in-call
+*** Every Task has an InCall
+**** but for tasks which were created by the RTS instead of an actual InCall the TSO pointer is NULL
+*** When a TSO makes a foreign call
+**** the current InCall is placed on a queue attached to the Capability, cap->suspended_ccalls
+**** from there the garbage collector can find the TSOs involved in foreign calls
+**** If one of these threads makes another in-call into Haskell, then another InCall is allocated
+**** That points back to the original InCall via incall->prev_stack
+**** So we have a representation of the out-call/in-call stack for each Task
+**** we can restore the previous InCall when an in-call returns.
+** The Scheduler
+
+scheduler(cap)
+{
+  for (;;) {
+    yieldCapability(cap);  /* give cap to anybody wanting in from outside */
+    tso = popRunQueue(cap);
+    result = StgRun(tso);
+    case result of
+      out of heap -> re-enqueue tso; call GC;
+      out of stack -> enlarge tso; re-enqueue tso;
+      time expired -> put tso on end of queue; /* round robin */
+      finished -> 
+        if (tso is a bound thread)
+          return;
+        else
+          continue;
+    }
+}
+
+** Run queue
+*** All runnable threads go into the run queue before they are actually executed
+*** implemented as a doubly-linked list
+*** link pointers are actually on the TSOs themselves
+**** this means the TSOs are marked dirty (for GC) when the queue is updated
+*** When capabilities are idle and there are threads left on the queue, they get pushed to other capabilities 
+*** generally, if a thread has exhausted its time slice then it goes to the back of the queue
+*** otherwise it goes to the front and we keep running it
+*** reasons why a thread would get put on the front
+**** stack overflow occurred
+**** heap overflow occurred
+***** sometimes a heap overflow and a context switch happen at the same time
+***** if the thread had requested a larte block of mem it still goes to the front of the queue so another thread doesn't steal it's large block
+***** otherwise it goes to the back
+**** task attempts to run a thread but it's bound to another task
+**** thread is associated to a blackhole and another thread is blocked on the thunk's evaluation
+**** (in threaded runtime) a thread was interrupted for stop-the-world GC
+**** (in non-threaded runtime) a thread waiting on IO unblocks 
+*** reasons a thread gets put on the back
+**** pre-empted by context-switch flag
+**** it's a new thread (so we don't starve old threads when a bunch of new ones show up)
+**** the thread becomes unblocked
+**** a thread is migrated to another capability (though in this case the queue was probably empty anyway)
+**** thread finishes but needs to be kept around (Related to in-calls, not sure how)
