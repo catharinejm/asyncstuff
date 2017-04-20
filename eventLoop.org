@@ -1,0 +1,10 @@
+* Event Loop (node-js style)
+** Rough algorithm
+*** Check timers, run callbacks for any expired timers
+*** Run function on front of queue
+*** repeat
+** Async I/O
+*** grab thread from a thread pool
+*** run blocking I/O operation on that thread
+*** when I/O finishes, put callback at front of event queue
+*** put thread back into pool
