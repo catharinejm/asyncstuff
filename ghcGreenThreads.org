@@ -125,4 +125,4 @@ scheduler(cap)
 *** context switching from bound to unbound (or vice versa) is much more expensive than from unbound to unbound
 *** note that the main thread is always bound
 **** it may be expensive to have a lot of communication between the main thread and unbound (forkIO) threads
-**** create an unbound coordinator thread insteda
+**** create an unbound coordinator thread instead
